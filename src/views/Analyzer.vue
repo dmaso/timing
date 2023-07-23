@@ -1,9 +1,11 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
+import { supabase } from '@/lib/supabaseClient'
 
 const input = ref('')
 const inputHands = ref([])
 const hands = ref({})
+const analyzedCount = ref(0)
 
 function orderHand(hand) {
   const order = 'AKQJT98765432'
@@ -194,6 +196,9 @@ function extractActions(handText, startDelimiter, endDelimiter) {
         case 'checks':
           actionSymbol = 'X'
           break
+        case 'bets': // Added this line for 'bets' action
+          actionSymbol = 'B'
+          break
       }
 
       if (actionSymbol) {
@@ -263,7 +268,8 @@ function analyze() {
           smallBlind: blinds.smallBlind,
           bigBlind: blinds.bigBlind
         },
-        board: boardInfo // Use the extracted board info here
+        board: boardInfo, // Use the extracted board info here
+        originalhand: hand.replace(/\r\n/g, '\n') // Replacing \r\n with just \n
       }
 
       const playerHands = extractPlayerHands(hand)
@@ -276,6 +282,11 @@ function analyze() {
       const riverActions = extractActions(hand, '*** RIVER ***', '*** SUMMARY ***')
 
       for (const position in playerHands) {
+        const preflopSequence = generateSequence(preflopActions[position].action || [])
+        const flopSequence = generateSequence(flopActions[position].action || [])
+        const turnSequence = generateSequence(turnActions[position].action || [])
+        const riverSequence = generateSequence(riverActions[position].action || [])
+
         hands.value[id][position] = {
           hand: playerHands[position],
           handChart: generateHandChart(playerHands[position]),
@@ -283,14 +294,71 @@ function analyze() {
           preflopAction: preflopActions[position].action || [],
           flopAction: flopActions[position].action || [],
           turnAction: turnActions[position].action || [],
-          riverAction: riverActions[position].action || []
+          riverAction: riverActions[position].action || [],
+          preflopSequence,
+          flopSequence,
+          turnSequence,
+          riverSequence
         }
       }
     }
   })
 
   console.log(hands.value)
-  console.log('Hand with ID 4494069189:', hands.value['4494069189'])
+  console.log('Hand with ID 4490754769:', hands.value['4490754769'])
+  analyzedCount.value = inputHands.value.length
+}
+
+function generateSequence(action) {
+  return action.filter((item) => isNaN(item)).join('')
+}
+
+async function saveToDatabase() {
+  console.log('Starting saveToDatabase function...')
+
+  if (inputHands.value.length > 0) {
+    const handsToSave = []
+
+    for (const handId in hands.value) {
+      const currentHand = hands.value[handId]
+
+      const dbHand = {
+        hand_id: handId,
+        date: currentHand.details.date,
+        smallblind: currentHand.details.smallBlind,
+        bigblind: currentHand.details.bigBlind,
+        flop: currentHand.board.flop,
+        turn: currentHand.board.turn,
+        river: currentHand.board.river,
+        utg: currentHand.UTG,
+        hj: currentHand.HJ,
+        co: currentHand.CO,
+        btn: currentHand.BTN,
+        sb: currentHand.SB,
+        bb: currentHand.BB,
+        originalhand: currentHand.originalhand // Adding the originalhand field to be saved to database
+      }
+      handsToSave.push(dbHand)
+    }
+
+    // Save all the prepared hands to the database
+    if (handsToSave.length > 0) {
+      console.log('Inserting new hands into the database...')
+      const { data, error } = await supabase
+        .from('hands')
+        .upsert(handsToSave, { onConflict: 'hand_id' }) // Use upsert with onConflict
+
+      if (error) {
+        console.error('Error saving to database:', error)
+      } else {
+        console.log('Successfully saved or updated in the database:', data)
+      }
+    } else {
+      console.log('No new hands to save.')
+    }
+  } else {
+    console.warn('No hands to save.')
+  }
 }
 </script>
 <template>
@@ -307,6 +375,17 @@ function analyze() {
           @click="analyze"
         >
           Analyze Hands
+        </button>
+      </div>
+      <div class="mt-5">
+        <span>Analyzed {{ analyzedCount }} hands.</span>
+      </div>
+      <div>
+        <button
+          class="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-4 rounded mt-5"
+          @click="saveToDatabase"
+        >
+          Save to Database
         </button>
       </div>
     </div>
