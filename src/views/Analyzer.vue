@@ -248,7 +248,38 @@ function extractBoard(hand) {
   return board
 }
 
+function generatePreflopCode(preflopActions) {
+  const positions = ['UTG', 'HJ', 'CO', 'BTN', 'SB', 'BB']
+  let preflopCode = ''
+  let anyActionFound
+
+  do {
+    anyActionFound = false // Reset the flag
+
+    for (const position of positions) {
+      const actions = preflopActions[position]?.action || []
+
+      // We're only interested in the even indexes
+      if (actions.length > 0 && actions[0] && isNaN(actions[0])) {
+        preflopCode += position + actions.shift() + '-'
+        actions.shift() // Skip the next item which is a number
+        anyActionFound = true // If we've found an action, set the flag
+      }
+    }
+  } while (anyActionFound) // If any position had an action on the last loop, go again
+
+  // Remove the trailing '-'
+  if (preflopCode.endsWith('-')) {
+    preflopCode = preflopCode.slice(0, -1)
+  }
+
+  return preflopCode
+}
+
 function analyze() {
+  let countUTGR = 0 // Initialize the counter for hands with "UTGR" in preflopCode
+  let handsWithUTGRWithoutUTG = [] // Initialize an array to store hands with UTGR in preflopCode but no 'UTG'
+
   inputHands.value.forEach((hand) => {
     const id = extractID(hand)
     const date = extractDate(hand)
@@ -268,15 +299,40 @@ function analyze() {
           smallBlind: blinds.smallBlind,
           bigBlind: blinds.bigBlind
         },
-        board: boardInfo, // Use the extracted board info here
-        originalhand: hand.replace(/\r\n/g, '\n') // Replacing \r\n with just \n
+        board: boardInfo,
+        originalhand: hand.replace(/\r\n/g, '\n')
       }
 
       const playerHands = extractPlayerHands(hand)
       const playerStackSizes = extractStackSize(hand, blinds.bigBlind)
 
+      // Check if 'UTG' entry exists in playerHands
+      if (!playerHands.UTG) {
+        // 'UTG' entry is missing, check if 'UTGR' is present in preflopCode
+        const preflopActions = extractActions(hand, '*** HOLE CARDS ***', '*** FLOP ***')
+        const clonedPreflopActions = JSON.parse(JSON.stringify(preflopActions))
+        const preflopCode = generatePreflopCode(clonedPreflopActions)
+        if (preflopCode.includes('UTGR')) {
+          countUTGR++
+          handsWithUTGRWithoutUTG.push(id)
+        }
+        return // Skip the rest of the processing for this hand
+      }
+
+      // 'UTG' entry exists, continue with the rest of the processing
+
       // Extract actions
       const preflopActions = extractActions(hand, '*** HOLE CARDS ***', '*** FLOP ***')
+
+      // Clone the preflopActions and use the generatePreflopCode function
+      const clonedPreflopActions = JSON.parse(JSON.stringify(preflopActions))
+      const preflopCode = generatePreflopCode(clonedPreflopActions)
+      hands.value[id].preflopCode = preflopCode
+
+      if (preflopCode.includes('UTGR')) {
+        countUTGR++
+      }
+
       const flopActions = extractActions(hand, '*** FLOP ***', '*** TURN ***')
       const turnActions = extractActions(hand, '*** TURN ***', '*** RIVER ***')
       const riverActions = extractActions(hand, '*** RIVER ***', '*** SUMMARY ***')
@@ -305,7 +361,10 @@ function analyze() {
   })
 
   console.log(hands.value)
-  console.log('Hand with ID 4490754769:', hands.value['4490754769'])
+  console.log('Hand with ID 4491987815:', hands.value['4491987815'])
+  console.log(`Number of hands with 'UTGR' in preflopCode: ${countUTGR}`)
+  console.log("Hands with UTGR in preflopCode but no 'UTG':", handsWithUTGRWithoutUTG)
+
   analyzedCount.value = inputHands.value.length
 }
 
@@ -336,6 +395,7 @@ async function saveToDatabase() {
         btn: currentHand.BTN,
         sb: currentHand.SB,
         bb: currentHand.BB,
+        preflopcode: currentHand.preflopCode, // Including the preflopCode
         originalhand: currentHand.originalhand // Adding the originalhand field to be saved to database
       }
       handsToSave.push(dbHand)
